@@ -234,3 +234,122 @@ export async function createAccount(input: { name: string; type: string; balance
   raise(error);
   return { id: data.id, name: data.name, type: data.type, balance: Number(data.balance) };
 }
+
+// ---------- extended SaaS operations ----------
+export async function updateTransaction(id: string, patch: { amount?: number; category?: string; description?: string; date?: string }) {
+  const fields: Record<string, any> = {};
+  if (patch.amount !== undefined) fields.amount = patch.amount;
+  if (patch.category !== undefined) fields.category = patch.category;
+  if (patch.description !== undefined) fields.description = patch.description;
+  if (patch.date !== undefined) fields.date = patch.date;
+  const { error } = await client().from("transactions").update(fields).eq("id", id);
+  raise(error);
+}
+
+export async function deleteTransaction(id: string) {
+  const { error } = await client().from("transactions").delete().eq("id", id);
+  raise(error);
+}
+
+export async function recordDuePayment(dueId: string, amount: number, note?: string) {
+  const db = client(), userId = await requireSignedInUser();
+  const { error: payError } = await db.from("due_payments").insert({ due_id: dueId, user_id: userId, amount, note: note || "", date: new Date().toISOString().slice(0, 10) });
+  raise(payError);
+  // A DB trigger keeps dues.paid_amount in sync with the payment ledger.
+  const { data: row, error } = await db.from("dues").select("*").eq("id", dueId).single();
+  raise(error);
+  return row as any;
+}
+
+export async function loadDuePayments(dueId: string) {
+  const { data, error } = await client().from("due_payments").select("*").eq("due_id", dueId).order("date", { ascending: false });
+  raise(error);
+  return (data || []).map((p: any) => ({ id: p.id, amount: Number(p.amount), note: p.note || "", date: dateOnly(p.date) }));
+}
+
+export async function updateDue(id: string, patch: { person_name?: string; amount?: number; due_date?: string; note?: string }) {
+  const { error } = await client().from("dues").update(patch).eq("id", id);
+  raise(error);
+}
+
+export async function deleteDue(id: string) {
+  const { error } = await client().from("dues").delete().eq("id", id);
+  raise(error);
+}
+
+export async function updateInvestment(id: string, patch: { asset_name?: string; invested_amount?: number; current_value?: number }) {
+  const { error } = await client().from("investments").update(patch).eq("id", id);
+  raise(error);
+}
+
+export async function deleteInvestment(id: string) {
+  const { error } = await client().from("investments").delete().eq("id", id);
+  raise(error);
+}
+
+export async function addInvestmentTransaction(investmentId: string, input: { type: "buy" | "sip" | "sell" | "dividend"; amount: number; units?: number; date: string }) {
+  const db = client(), userId = await requireSignedInUser();
+  const { error } = await db.from("investment_transactions").insert({ investment_id: investmentId, user_id: userId, type: input.type, amount: input.amount, units: input.units || 0, date: input.date });
+  raise(error);
+}
+
+export async function loadInvestmentTransactions(investmentId: string) {
+  const { data, error } = await client().from("investment_transactions").select("*").eq("investment_id", investmentId).order("date", { ascending: false });
+  raise(error);
+  return (data || []).map((t: any) => ({ id: t.id, type: t.type, amount: Number(t.amount), date: dateOnly(t.date) }));
+}
+
+export async function contributeToGoal(goalId: string, amount: number) {
+  const { data, error } = await client().rpc("contribute_to_goal", { p_goal_id: goalId, p_amount: amount });
+  raise(error);
+  const row: any = data;
+  return { id: row.id, name: row.name, target: Number(row.target_amount), saved: Number(row.current_amount), date: dateOnly(row.target_date), priority: priorityLabel(row.priority) as "Essential" | "Important" | "Flexible" };
+}
+
+export async function updateGoal(id: string, patch: { name?: string; target_amount?: number; target_date?: string }) {
+  const fields: Record<string, any> = {};
+  if (patch.name !== undefined) fields.name = patch.name;
+  if (patch.target_amount !== undefined) fields.target_amount = patch.target_amount;
+  if (patch.target_date !== undefined) fields.target_date = patch.target_date;
+  const { error } = await client().from("goals").update(fields).eq("id", id);
+  raise(error);
+}
+
+export async function deleteGoal(id: string) {
+  const { error } = await client().from("goals").delete().eq("id", id);
+  raise(error);
+}
+
+export async function updateBill(id: string, patch: { name?: string; amount?: number; frequency?: string; next_due_date?: string; account_id?: string | null; reminder_days?: number }) {
+  const fields: Record<string, any> = {};
+  if (patch.name !== undefined) fields.name = patch.name;
+  if (patch.amount !== undefined) fields.amount = patch.amount;
+  if (patch.frequency !== undefined) fields.frequency = patch.frequency.toLowerCase();
+  if (patch.next_due_date !== undefined) fields.next_due_date = patch.next_due_date;
+  if (patch.account_id !== undefined) fields.account_id = patch.account_id;
+  if (patch.reminder_days !== undefined) fields.reminder_days = patch.reminder_days;
+  const { error } = await client().from("bills").update(fields).eq("id", id);
+  raise(error);
+}
+
+export async function deleteBill(id: string) {
+  const { error } = await client().from("bills").delete().eq("id", id);
+  raise(error);
+}
+
+export async function setProfileMonthlyIncome(monthlyIncome: number) {
+  const db = client(), userId = await requireSignedInUser();
+  const { error } = await db.from("profiles").update({ monthly_income: monthlyIncome }).eq("id", userId);
+  raise(error);
+}
+
+export async function setProfileCurrency(currency: string) {
+  const db = client(), userId = await requireSignedInUser();
+  const { error } = await db.from("profiles").update({ currency }).eq("id", userId);
+  raise(error);
+}
+
+export async function exportAllData() {
+  const w = await loadWorkspace();
+  return JSON.stringify({ exportedAt: new Date().toISOString(), version: 1, ...w }, null, 2);
+}

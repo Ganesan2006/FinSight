@@ -550,3 +550,84 @@ BEGIN
   RETURN selected_bill;
 END;
 $$;
+
+-- ============================================================
+-- 12. GOAL CONTRIBUTIONS (audit log for the Goal tab)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.goal_contributions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  goal_id UUID NOT NULL REFERENCES public.goals(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  amount NUMERIC(15,2) NOT NULL CHECK (amount > 0),
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  note TEXT DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.goal_contributions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can CRUD own goal contributions" ON public.goal_contributions;
+CREATE POLICY "Users can CRUD own goal contributions"
+  ON public.goal_contributions FOR ALL
+  USING (
+    auth.uid() = user_id
+    AND EXISTS (SELECT 1 FROM public.goals g WHERE g.id = goal_id AND g.user_id = auth.uid())
+  )
+  WITH CHECK (
+    auth.uid() = user_id
+    AND EXISTS (SELECT 1 FROM public.goals g WHERE g.id = goal_id AND g.user_id = auth.uid())
+  );
+
+CREATE INDEX IF NOT EXISTS idx_goal_contributions_goal ON public.goal_contributions(goal_id);
+
+-- Add money to a goal in one atomic, RLS-safe step and return the fresh row.
+CREATE OR REPLACE FUNCTION public.contribute_to_goal(p_goal_id UUID, p_amount NUMERIC)
+RETURNS public.goals
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  updated_goal public.goals;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+  IF p_amount <= 0 THEN
+    RAISE EXCEPTION 'Contribution must be greater than zero';
+  END IF;
+
+  UPDATE public.goals
+    SET current_amount = current_amount + p_amount
+    WHERE id = p_goal_id AND user_id = auth.uid()
+    RETURNING * INTO updated_goal;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Goal was not found';
+  END IF;
+
+  INSERT INTO public.goal_contributions (goal_id, user_id, amount)
+    VALUES (p_goal_id, auth.uid(), p_amount);
+
+  RETURN updated_goal;
+END;
+$$;
+
+-- Keep dues.paid_amount consistent with the due_payments ledger.
+CREATE OR REPLACE FUNCTION public.refresh_due_paid_amount()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  UPDATE public.dues
+    SET paid_amount = COALESCE((SELECT SUM(amount) FROM public.due_payments WHERE due_id = COALESCE(NEW.due_id, OLD.due_id)), 0)
+    WHERE id = COALESCE(NEW.due_id, OLD.due_id);
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS due_payments_refresh ON public.due_payments;
+CREATE TRIGGER due_payments_refresh
+  AFTER INSERT OR UPDATE OR DELETE ON public.due_payments
+  FOR EACH ROW EXECUTE FUNCTION public.refresh_due_paid_amount();
