@@ -173,10 +173,10 @@ export function useAppEngine() {
       try {
         const user = await api.currentUser();
         if (!active) return;
-        if (user && !user.is_anonymous) {
+        if (user) {
           const w = await api.loadWorkspace();
           if (!active) return;
-          hydrate(w); // loadWorkspace auto-creates the profile row from auth metadata — no extra screens
+          hydrate(w); // custom SQL session restored — straight to the dashboard
         }
       } catch (e: any) {
         if (active) Alert.alert("Could not load your account", e?.message || "Please sign in again.");
@@ -213,14 +213,10 @@ export function useAppEngine() {
   const signUp = (value: UserProfile, password: string) => guard(async () => {
     if (!cloud) { Alert.alert("Demo mode", "Supabase keys are not configured, so this build runs fully offline with local data. Add EXPO_PUBLIC_SUPABASE_URL and ANON key to .env.local for real accounts."); return; }
     setAuthBusy(true);
-    const { needsEmailConfirmation } = await api.signUpWithPassword({ ...value, password }); // creates auth user + profile row only
-    if (needsEmailConfirmation) {
-      Alert.alert("Confirm your email", "We sent a confirmation link to " + value.email + ". Tap the link, then log in.");
-    } else {
-      const w = await api.loadWorkspace();                    // load their fresh workspace…
-      hydrate(w);                                             // …and go directly to the dashboard
-      notify("Account created", `Welcome, ${value.fullName.split(" ")[0]}! Tap ＋ to add your first transaction.`);
-    }
+    await api.signUpWithPassword({ ...value, password }); // hash password → INSERT into public.users → session saved
+    const w = await api.loadWorkspace();                  // load their fresh workspace…
+    hydrate(w);                                           // …and go directly to the dashboard (no email verification)
+    notify("Account created", `Welcome, ${value.fullName.split(" ")[0]}! Tap ＋ to add your first transaction.`);
     setAuthBusy(false);
   });
 
@@ -235,9 +231,8 @@ export function useAppEngine() {
 
   const resetPassword = (email: string) => guard(async () => {
     if (!cloud) { notify("Password reset", "Not available in offline demo mode."); return; }
-    const { error } = await supabase!.auth.resetPasswordForEmail(email);
-    if (error) throw error;
-    notify("Reset link sent", "Check your inbox for a password reset link.");
+    // Custom SQL auth has no email provider — guide the user to support instead.
+    Alert.alert("Password reset", "Accounts are stored directly in the database, so automatic email resets are not enabled. Please contact support to reset your password.");
     setAuthMode("login");
   });
 

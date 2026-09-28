@@ -1,4 +1,6 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase";
+import { hashPassword, verifyPassword, type HashedPassword } from "./crypto";
 
 function client() {
   if (!supabase) throw new Error("Supabase is not configured. Add the EXPO_PUBLIC keys to .env.local.");
@@ -7,109 +9,136 @@ function client() {
 function raise(error: { message: string } | null) {
   if (error) throw new Error(error.message);
 }
+
+// ============================================================
+// Custom SQL authentication — NO supabase.auth.* calls, NO
+// email verification. Users live in the plain `public.users`
+// table with a bcrypt-hashed password. The signed-in user's
+// id lives in AsyncStorage and every query filters on it.
+// ============================================================
+const SESSION_KEY = "finsight.session.user_id";
+
+export interface AppUser { id: string; fullName: string; email: string; phone: string }
+
+let cachedUserId: string | null | undefined; // undefined = not loaded yet
+
+async function getSessionUserId(): Promise<string | null> {
+  if (cachedUserId !== undefined) return cachedUserId;
+  try {
+    const raw = await AsyncStorage.getItem(SESSION_KEY);
+    cachedUserId = raw ? JSON.parse(raw) : null;
+  } catch {
+    cachedUserId = null;
+  }
+  return cachedUserId;
+}
+
+async function setSessionUserId(id: string | null) {
+  cachedUserId = id;
+  try {
+    if (id) await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(id));
+    else await AsyncStorage.removeItem(SESSION_KEY);
+  } catch { /* storage unavailable */ }
+}
+
+async function requireSignedInUser(): Promise<string> {
+  const id = await getSessionUserId();
+  if (!id) throw new Error("Please sign in to continue.");
+  return id;
+}
+
+/** Minimal sign-up: name + email + password → hashed → INSERT into public.users. */
+export async function signUpWithPassword(input: { fullName: string; email: string; phone?: string; password: string }) {
+  const db = client();
+  const email = input.email.trim().toLowerCase();
+  if (!input.fullName.trim()) throw new Error("Please enter your name.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Please enter a valid email address.");
+  if (input.password.length < 6) throw new Error("Password must be at least 6 characters.");
+
+  const { data: existing, error: checkError } = await db.from("users").select("id").eq("email", email).maybeSingle();
+  raise(checkError);
+  if (existing) throw new Error("This email is already registered. Please log in instead.");
+
+  const stored = await hashPassword(input.password); // plain password never leaves the device
+  const { data, error } = await db
+    .from("users")
+    .insert({
+      full_name: input.fullName.trim(),
+      email,
+      phone_number: input.phone?.trim() || null,
+      password_algorithm: stored.algorithm,
+      password_salt: stored.salt,
+      password_hash: stored.hash,
+      currency: "INR",
+      monthly_income: 0,
+    })
+    .select("*")
+    .single();
+  if (error && /duplicate/i.test(error.message)) throw new Error("This email is already registered. Please log in instead.");
+  raise(error);
+
+  await setSessionUserId(data.id);
+  return { user: rowToUser(data) };
+}
+
+/** Login: fetch the row by email, verify the bcrypt hash locally. */
+export async function signInWithPassword(email: string, password: string) {
+  const db = client();
+  const normalized = email.trim().toLowerCase();
+  const { data, error } = await db.from("users").select("*").eq("email", normalized).maybeSingle();
+  raise(error);
+  if (!data) throw new Error("No account found for this email. Please create one.");
+  const ok = await verifyPassword(password, {
+    algorithm: data.password_algorithm,
+    salt: data.password_salt,
+    hash: data.password_hash,
+  } as HashedPassword);
+  if (!ok) throw new Error("Incorrect password. Please try again.");
+  await setSessionUserId(data.id);
+  return { user: rowToUser(data) };
+}
+
+export async function signOut() {
+  await setSessionUserId(null);
+}
+
+function rowToUser(row: any): AppUser {
+  return { id: row.id, fullName: row.full_name || "", email: row.email || "", phone: row.phone_number || "" };
+}
+
+/** Restore session on app start: read saved id → SELECT profile from users. */
+export async function currentUser(): Promise<AppUser | null> {
+  const id = await getSessionUserId();
+  if (!id) return null;
+  const { data, error } = await client().from("users").select("*").eq("id", id).maybeSingle();
+  if (error || !data) { await setSessionUserId(null); return null; }
+  return rowToUser(data);
+}
 function dateOnly(value?: string | null) {
   return value ? String(value).slice(0, 10) : new Date().toISOString().slice(0, 10);
 }
 const priorityLabel = (value: string) => value === "essential" ? "Essential" : value === "flexible" ? "Flexible" : "Important";
 const priorityValue = (value: string) => value.toLowerCase();
 
-export async function currentUser() {
-  const db = client();
-  const { data: sessionData, error: sessionError } = await db.auth.getSession();
-  raise(sessionError);
-  if (!sessionData.session) return null;
-  const { data, error } = await db.auth.getUser();
-  if (error) {
-    const authError = error as any;
-    if (authError.status === 401 || authError.name === "AuthSessionMissingError") {
-      await db.auth.signOut({ scope: "local" });
-      return null;
-    }
-    raise(error);
-  }
-  return data.user;
-}
-
-async function requireSignedInUser() {
-  const user = await currentUser();
-  if (!user || user.is_anonymous) throw new Error("Please sign in to continue.");
-  return user.id;
-}
-
-// Minimal sign-up: name + email + password only.
-// Supabase hashes (bcrypt) the password server-side — we never store or send plain text.
-// No email verification (Dashboard → Authentication → Providers → Email → turn OFF "Confirm email").
-// No auto-created "main account" — the user adds their own accounts from the Spend tab.
-export async function signUpWithPassword(input: { fullName: string; email: string; phone?: string; password: string }) {
-  const db = client();
-  const { data, error } = await db.auth.signUp({
-    email: input.email,
-    password: input.password,
-    options: { data: { full_name: input.fullName } },
-  });
-  if (error) {
-    const msg = error.message || "";
-    if (/sign.?ups?.not.?allowed/i.test(msg)) {
-      throw new Error('Sign-ups are disabled on your Supabase project. Fix: Supabase Dashboard → Authentication → Providers → Email → enable "Allow new users to sign up", then Save.');
-    }
-    if (/already registered|already exists/i.test(msg)) {
-      throw new Error("This email is already registered. Please log in instead.");
-    }
-    throw new Error(msg || "Could not create the account.");
-  }
-  const user = data.user;
-  if (!user) throw new Error("Supabase did not return the new account.");
-
-  // Create the profile row directly. With "Confirm email" OFF, signUp returns a
-  // live session immediately, so RLS lets this insert through as the new user.
-  const { error: profileError } = await db.from("profiles").upsert({
-    id: user.id,
-    full_name: input.fullName,
-    email: input.email,
-    phone_number: input.phone ?? null,
-    onboarding_completed: true,
-  });
-  if (profileError && /duplicate key value violates unique constraint "users_email_key"/i.test(profileError.message)) {
-    throw new Error("This email is already registered. Please log in instead.");
-  }
-  raise(profileError);
-  return { needsEmailConfirmation: !data.session };
-}
-
-export async function signInWithPassword(email: string, password: string) {
-  const { data, error } = await client().auth.signInWithPassword({ email, password });
-  raise(error);
-  if (!data.user) throw new Error("Supabase did not return a signed-in account.");
-}
-
-export async function signOut() {
-  const { error } = await client().auth.signOut();
-  raise(error);
-}
-
 async function saveProfile(profile: { fullName: string; email: string; phone: string }) {
   const db = client();
   const userId = await requireSignedInUser();
-  const { error } = await db.from("profiles").upsert({
-    id: userId,
+  const { error } = await db.from("users").update({
     full_name: profile.fullName,
-    email: profile.email,
+    email: profile.email.toLowerCase(),
     phone_number: profile.phone,
-    onboarding_completed: true
-  });
+  }).eq("id", userId);
   raise(error);
 }
 
 export async function loadWorkspace() {
   const db = client();
-  const { data: auth, error: authError } = await db.auth.getUser();
-  raise(authError);
-  const signedInUser = auth.user;
-  if (!signedInUser) throw new Error("The secure session has expired. Please sign in again.");
+  const signedInUser = await currentUser();
+  if (!signedInUser) throw new Error("Your session has expired. Please sign in again.");
   const userId = signedInUser.id;
 
   const [profile, accounts, transactions, dues, investments, goals, bills, categories] = await Promise.all([
-    db.from("profiles").select("*").eq("id", userId).maybeSingle(),
+    db.from("users").select("*").eq("id", userId).maybeSingle(),
     db.from("accounts").select("*").eq("user_id", userId).eq("is_active", true).order("created_at"),
     db.from("transactions").select("*").eq("user_id", userId).order("date", { ascending: false }).limit(300),
     db.from("dues").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
@@ -120,31 +149,21 @@ export async function loadWorkspace() {
   ]);
   [profile, accounts, transactions, dues, investments, goals, bills, categories].forEach((result: any) => raise(result.error));
 
-  let profileRow = profile.data;
-  let accountRows = accounts.data || [];
-  if (!profileRow?.onboarding_completed) {
-    const fullName = signedInUser.user_metadata?.full_name || profileRow?.full_name || "";
-    const phone = signedInUser.user_metadata?.phone_number || "";
-    if (signedInUser.email && fullName && phone) {
-      const completed = { id: userId, full_name: fullName, email: signedInUser.email, phone_number: phone, onboarding_completed: true };
-      const { error } = await db.from("profiles").upsert(completed);
-      raise(error);
-      profileRow = completed;
-    }
-  }
-  // No auto-created "Main account" — the user adds their own accounts from Spend → Accounts.
-  if (!accountRows.length) {
-    const { data, error } = await db.from("categories").insert(
+  const userRow = profile.data;
+  const accountRows = accounts.data || [];
+  // First login after sign-up: seed default expense/income categories.
+  if (!(categories.data || []).length) {
+    const { error } = await db.from("categories").insert(
       ["Food", "Shopping", "Bills", "Travel", "Health"].map((name) => ({ user_id: userId, name, type: "expense", budget_limit: 0 }))
     );
     raise(error);
   }
 
   return {
-    profile: profileRow?.onboarding_completed ? {
-      fullName: profileRow.full_name || "",
-      email: profileRow.email || signedInUser.email || "",
-      phone: profileRow.phone_number || ""
+    profile: userRow ? {
+      fullName: userRow.full_name || "",
+      email: userRow.email || signedInUser.email || "",
+      phone: userRow.phone_number || ""
     } : null,
     accounts: accountRows.map((a: any) => ({ id: a.id, name: a.name, type: a.type, balance: Number(a.balance) })),
     transactions: (transactions.data || []).map((t: any) => ({
@@ -171,17 +190,36 @@ export async function loadWorkspace() {
   };
 }
 
-export async function addTransaction(input: { accountId: string; toAccountId?: string; type: "income" | "expense" | "transfer"; amount: number; category: string; description: string; date: string }) {
-  const { data, error } = await client().rpc("create_transaction", {
-    p_account_id: input.accountId,
-    p_to_account_id: input.toAccountId || null,
-    p_type: input.type,
-    p_amount: input.amount,
-    p_category: input.category,
-    p_description: input.description,
-    p_date: input.date
-  });
+async function adjustAccountBalance(accountId: string, delta: number) {
+  const db = client();
+  const { data, error } = await db.from("accounts").select("balance").eq("id", accountId).maybeSingle();
   raise(error);
+  if (!data) return;
+  const { error: updateError } = await db.from("accounts").update({ balance: Number(data.balance) + delta }).eq("id", accountId);
+  raise(updateError);
+}
+
+export async function addTransaction(input: { userId?: string; accountId: string; toAccountId?: string; type: "income" | "expense" | "transfer"; amount: number; category: string; description: string; date: string }) {
+  const db = client();
+  const userId = input.userId ?? (await requireSignedInUser());
+  const { data, error } = await db.from("transactions").insert({
+    user_id: userId,
+    account_id: input.accountId,
+    to_account_id: input.type === "transfer" ? input.toAccountId || null : null,
+    type: input.type,
+    amount: input.amount,
+    category: input.category || "Other",
+    description: input.description,
+    date: input.date,
+  }).select("*").single();
+  raise(error);
+  // Keep account balances in sync with the recorded movement.
+  if (input.type === "expense") await adjustAccountBalance(input.accountId, -input.amount);
+  if (input.type === "income") await adjustAccountBalance(input.accountId, input.amount);
+  if (input.type === "transfer") {
+    await adjustAccountBalance(input.accountId, -input.amount);
+    if (input.toAccountId) await adjustAccountBalance(input.toAccountId, input.amount);
+  }
   const row: any = data;
   return { id: row.id, title: row.description || row.category, category: row.category, amount: Number(row.amount), kind: row.type, date: dateOnly(row.date), accountId: row.account_id };
 }
@@ -213,8 +251,24 @@ export async function addBill(input: { name: string; amount: number; frequency: 
   return { id: data.id, name: data.name, amount: Number(data.amount), frequency: data.frequency.charAt(0).toUpperCase() + data.frequency.slice(1), date: dateOnly(data.next_due_date), status: data.status === "paid" ? "Paid" : data.status === "overdue" ? "Overdue" : "Upcoming" };
 }
 export async function markBillPaid(billId: string) {
-  const { data, error } = await client().rpc("mark_bill_paid", { p_bill_id: billId });
+  const db = client();
+  const userId = await requireSignedInUser();
+  const { data: bill, error: fetchError } = await db.from("bills").select("*").eq("id", billId).maybeSingle();
+  raise(fetchError);
+  if (!bill) throw new Error("Bill not found.");
+  // Log the payment and advance the next due date by one frequency period.
+  const { error: payError } = await db.from("bill_payments").insert({ user_id: userId, bill_id: billId, amount: Number(bill.amount), paid_at: new Date().toISOString() });
+  raise(payError);
+  const next = new Date(bill.next_due_date);
+  const step = bill.frequency === "weekly" ? 7 : bill.frequency === "quarterly" ? 91 : bill.frequency === "yearly" ? 365 : 30;
+  next.setDate(next.getDate() + step);
+  const { data, error } = await db.from("bills").update({
+    status: "upcoming",
+    last_paid_date: new Date().toISOString().slice(0, 10),
+    next_due_date: next.toISOString().slice(0, 10),
+  }).eq("id", billId).select("*").single();
   raise(error);
+  if (bill.account_id) await adjustAccountBalance(bill.account_id, -Number(bill.amount));
   const row: any = data;
   return { id: row.id, name: row.name, amount: Number(row.amount), frequency: row.frequency.charAt(0).toUpperCase() + row.frequency.slice(1), date: dateOnly(row.next_due_date), status: row.status === "paid" ? "Paid" : row.status === "overdue" ? "Overdue" : "Upcoming" };
 }
@@ -295,7 +349,13 @@ export async function loadInvestmentTransactions(investmentId: string) {
 }
 
 export async function contributeToGoal(goalId: string, amount: number) {
-  const { data, error } = await client().rpc("contribute_to_goal", { p_goal_id: goalId, p_amount: amount });
+  const db = client();
+  const { data: goal, error: fetchError } = await db.from("goals").select("*").eq("id", goalId).maybeSingle();
+  raise(fetchError);
+  if (!goal) throw new Error("Goal not found.");
+  const { data, error } = await db.from("goals").update({
+    current_amount: Number(goal.current_amount) + amount,
+  }).eq("id", goalId).select("*").single();
   raise(error);
   const row: any = data;
   return { id: row.id, name: row.name, target: Number(row.target_amount), saved: Number(row.current_amount), date: dateOnly(row.target_date), priority: priorityLabel(row.priority) as "Essential" | "Important" | "Flexible" };
@@ -334,13 +394,13 @@ export async function deleteBill(id: string) {
 
 export async function setProfileMonthlyIncome(monthlyIncome: number) {
   const db = client(), userId = await requireSignedInUser();
-  const { error } = await db.from("profiles").update({ monthly_income: monthlyIncome }).eq("id", userId);
+  const { error } = await db.from("users").update({ monthly_income: monthlyIncome }).eq("id", userId);
   raise(error);
 }
 
 export async function setProfileCurrency(currency: string) {
   const db = client(), userId = await requireSignedInUser();
-  const { error } = await db.from("profiles").update({ currency }).eq("id", userId);
+  const { error } = await db.from("users").update({ currency }).eq("id", userId);
   raise(error);
 }
 
