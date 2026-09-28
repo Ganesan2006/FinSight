@@ -10,7 +10,6 @@ import { Field, Glass, PrimaryButton } from "../components/glass/primitives";
 
 export function AuthScreens({ E, ctx }: ScreenProps) {
   const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState(E.authEmail);
   const [password, setPassword] = useState("");
   const mode = E.authMode;
@@ -41,14 +40,11 @@ export function AuthScreens({ E, ctx }: ScreenProps) {
               {mode === "signup" ? "Create your account." : mode === "reset" ? "Reset your password." : "Welcome back."}
             </Text>
             <Text style={[ctx.s.sub, { lineHeight: 18, marginBottom: 20 }]}>
-              {mode === "signup" ? "Four fields, then you're in — no setup steps." : mode === "reset" ? "We'll email you a secure reset link." : "Sign in to view your finances securely."}
+              {mode === "signup" ? "Three fields, then you're in — no setup steps." : mode === "reset" ? "We'll email you a secure reset link." : "Sign in to view your finances securely."}
             </Text>
             <Glass ctx={ctx} style={{ padding: 17 }}>
               {mode === "signup" && (
-                <>
-                  <Field ctx={ctx} value={name} onChangeText={setName} placeholder="Name" />
-                  <Field ctx={ctx} value={phone} onChangeText={setPhone} placeholder="Phone number" keyboardType="phone-pad" />
-                </>
+                <Field ctx={ctx} value={name} onChangeText={setName} placeholder="Name" />
               )}
               <Field ctx={ctx} value={email} onChangeText={setEmail} placeholder="Email" keyboardType="email-address" />
               {mode !== "reset" && <Field ctx={ctx} value={password} onChangeText={setPassword} placeholder="Password" secure />}
@@ -58,11 +54,11 @@ export function AuthScreens({ E, ctx }: ScreenProps) {
                 <PrimaryButton
                   ctx={ctx}
                   loading={E.authBusy}
-                  disabled={mode === "signup" ? !(valid && name.trim() && phone.trim()) : !valid}
+                  disabled={mode === "signup" ? !(valid && name.trim()) : !valid}
                   label={mode === "signup" ? "Create Account" : "Sign in"}
                   onPress={() => {
                     if (!valid) return;
-                    if (mode === "signup") E.signUp({ fullName: name.trim(), email: email.trim(), phone: phone.trim() }, password);
+                    if (mode === "signup") E.signUp({ fullName: name.trim(), email: email.trim(), phone: "" }, password);
                     else E.signIn(email.trim(), password);
                   }}
                 />

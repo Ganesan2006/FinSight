@@ -213,7 +213,7 @@ export function useAppEngine() {
   const signUp = (value: UserProfile, password: string) => guard(async () => {
     if (!cloud) { Alert.alert("Demo mode", "Supabase keys are not configured, so this build runs fully offline with local data. Add EXPO_PUBLIC_SUPABASE_URL and ANON key to .env.local for real accounts."); return; }
     setAuthBusy(true);
-    const { needsEmailConfirmation } = await api.signUpWithPassword({ ...value, password }); // creates profile + main account
+    const { needsEmailConfirmation } = await api.signUpWithPassword({ ...value, password }); // creates auth user + profile row only
     if (needsEmailConfirmation) {
       Alert.alert("Confirm your email", "We sent a confirmation link to " + value.email + ". Tap the link, then log in.");
     } else {

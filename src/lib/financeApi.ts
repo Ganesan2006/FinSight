@@ -36,14 +36,16 @@ async function requireSignedInUser() {
   return user.id;
 }
 
-// Minimal sign-up: create auth user → create profile + main account → stay signed in.
-// No email confirmation required (disable it in Supabase → Auth → Providers → Email).
-export async function signUpWithPassword(input: { fullName: string; email: string; phone: string; password: string }) {
+// Minimal sign-up: name + email + password only.
+// Supabase hashes (bcrypt) the password server-side — we never store or send plain text.
+// No email verification (Dashboard → Authentication → Providers → Email → turn OFF "Confirm email").
+// No auto-created "main account" — the user adds their own accounts from the Spend tab.
+export async function signUpWithPassword(input: { fullName: string; email: string; phone?: string; password: string }) {
   const db = client();
   const { data, error } = await db.auth.signUp({
     email: input.email,
     password: input.password,
-    options: { data: { full_name: input.fullName, phone_number: input.phone } },
+    options: { data: { full_name: input.fullName } },
   });
   if (error) {
     const msg = error.message || "";
@@ -58,24 +60,20 @@ export async function signUpWithPassword(input: { fullName: string; email: strin
   const user = data.user;
   if (!user) throw new Error("Supabase did not return the new account.");
 
-  // If email confirmation is ON, no session is returned — upgrade the anonymous
-  // session so profile/account rows get created under the real user id.
-  let needsEmailConfirmation = false;
-  if (!data.session) {
-    needsEmailConfirmation = true;
-    const anon = await client().auth.getSession();
-    if (anon.data.session) {
-      const { error: upgradeError } = await client().auth.setSession({
-        access_token: anon.data.session.access_token,
-        refresh_token: anon.data.session.refresh_token,
-      });
-      raise(upgradeError);
-    }
+  // Create the profile row directly. With "Confirm email" OFF, signUp returns a
+  // live session immediately, so RLS lets this insert through as the new user.
+  const { error: profileError } = await db.from("profiles").upsert({
+    id: user.id,
+    full_name: input.fullName,
+    email: input.email,
+    phone_number: input.phone ?? null,
+    onboarding_completed: true,
+  });
+  if (profileError && /duplicate key value violates unique constraint "users_email_key"/i.test(profileError.message)) {
+    throw new Error("This email is already registered. Please log in instead.");
   }
-
-  await saveProfile({ fullName: input.fullName, email: input.email, phone: input.phone });
-  await ensureMainAccount(user.id);
-  return { needsEmailConfirmation };
+  raise(profileError);
+  return { needsEmailConfirmation: !data.session };
 }
 
 export async function signInWithPassword(email: string, password: string) {
@@ -100,18 +98,6 @@ async function saveProfile(profile: { fullName: string; email: string; phone: st
     onboarding_completed: true
   });
   raise(error);
-}
-
-async function ensureMainAccount(userId: string) {
-  const db = client();
-  const { data: accounts, error } = await db.from("accounts").select("id").eq("user_id", userId).limit(1);
-  raise(error);
-  if (!accounts?.length) {
-    const { error: createAccountError } = await db.from("accounts").insert({
-      user_id: userId, name: "Main account", type: "bank", balance: 0
-    });
-    raise(createAccountError);
-  }
 }
 
 export async function loadWorkspace() {
@@ -146,10 +132,12 @@ export async function loadWorkspace() {
       profileRow = completed;
     }
   }
+  // No auto-created "Main account" — the user adds their own accounts from Spend → Accounts.
   if (!accountRows.length) {
-    const { data, error } = await db.from("accounts").insert({ user_id: userId, name: "Main account", type: "bank", balance: 0 }).select().single();
+    const { data, error } = await db.from("categories").insert(
+      ["Food", "Shopping", "Bills", "Travel", "Health"].map((name) => ({ user_id: userId, name, type: "expense", budget_limit: 0 }))
+    );
     raise(error);
-    accountRows = data ? [data] : [];
   }
 
   return {
