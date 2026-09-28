@@ -213,10 +213,14 @@ export function useAppEngine() {
   const signUp = (value: UserProfile, password: string) => guard(async () => {
     if (!cloud) { Alert.alert("Demo mode", "Supabase keys are not configured, so this build runs fully offline with local data. Add EXPO_PUBLIC_SUPABASE_URL and ANON key to .env.local for real accounts."); return; }
     setAuthBusy(true);
-    await api.signUpWithPassword({ ...value, password });   // creates profile + main account, stays signed in
-    const w = await api.loadWorkspace();                    // load their fresh workspace…
-    hydrate(w);                                             // …and go directly to the dashboard
-    notify("Account created", `Welcome, ${value.fullName.split(" ")[0]}! Tap ＋ to add your first transaction.`);
+    const { needsEmailConfirmation } = await api.signUpWithPassword({ ...value, password }); // creates profile + main account
+    if (needsEmailConfirmation) {
+      Alert.alert("Confirm your email", "We sent a confirmation link to " + value.email + ". Tap the link, then log in.");
+    } else {
+      const w = await api.loadWorkspace();                    // load their fresh workspace…
+      hydrate(w);                                             // …and go directly to the dashboard
+      notify("Account created", `Welcome, ${value.fullName.split(" ")[0]}! Tap ＋ to add your first transaction.`);
+    }
     setAuthBusy(false);
   });
 

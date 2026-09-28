@@ -45,14 +45,37 @@ export async function signUpWithPassword(input: { fullName: string; email: strin
     password: input.password,
     options: { data: { full_name: input.fullName, phone_number: input.phone } },
   });
-  raise(error);
+  if (error) {
+    const msg = error.message || "";
+    if (/sign.?ups?.not.?allowed/i.test(msg)) {
+      throw new Error('Sign-ups are disabled on your Supabase project. Fix: Supabase Dashboard → Authentication → Providers → Email → enable "Allow new users to sign up", then Save.');
+    }
+    if (/already registered|already exists/i.test(msg)) {
+      throw new Error("This email is already registered. Please log in instead.");
+    }
+    throw new Error(msg || "Could not create the account.");
+  }
   const user = data.user;
   if (!user) throw new Error("Supabase did not return the new account.");
-  if (!data.session) throw new Error("Please confirm your email first, or disable email confirmation in Supabase Auth settings.");
+
+  // If email confirmation is ON, no session is returned — upgrade the anonymous
+  // session so profile/account rows get created under the real user id.
+  let needsEmailConfirmation = false;
+  if (!data.session) {
+    needsEmailConfirmation = true;
+    const anon = await client().auth.getSession();
+    if (anon.data.session) {
+      const { error: upgradeError } = await client().auth.setSession({
+        access_token: anon.data.session.access_token,
+        refresh_token: anon.data.session.refresh_token,
+      });
+      raise(upgradeError);
+    }
+  }
 
   await saveProfile({ fullName: input.fullName, email: input.email, phone: input.phone });
   await ensureMainAccount(user.id);
-  return { needsEmailConfirmation: false };
+  return { needsEmailConfirmation };
 }
 
 export async function signInWithPassword(email: string, password: string) {
