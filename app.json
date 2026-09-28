@@ -18,7 +18,8 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#0b1020"
-      }
+      },
+      "package": "com.anonymous.financecopilot"
     },
     "web": {
       "bundler": "metro"
