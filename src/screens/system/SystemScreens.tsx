@@ -119,7 +119,7 @@ export function SettingsScreen({ E, ctx }: ScreenProps) {
       <Glass ctx={ctx} style={ctx.s.card}>
         <Row ctx={ctx} title="Export / import data" sub="JSON backup of your workspace" amount="" icon={Share2} onPress={() => E.setSubpage("Export / import data")} />
         <Row ctx={ctx} title="Notifications" sub={`${E.notifications.filter((n) => !n.read).length} unread`} amount="" icon={Bell} onPress={() => E.setSubpage("Notifications")} />
-        <Row ctx={ctx} title="Re-run initial setup" sub="Update currency, first account, income" amount="" icon={Settings} onPress={() => E.setAuthMode("onboarding")} />
+        <Row ctx={ctx} title="Add an account" sub="Bank, cash or credit balance" amount="" icon={Settings} onPress={() => { E.setTab("Spend"); E.setSubpage("Accounts"); }} />
         <View style={ctx.s.securityNote}>
           <ShieldCheck size={16} color={ctx.T.mint} />
           <Text style={[ctx.s.meta, { flex: 1, lineHeight: 15 }]}>

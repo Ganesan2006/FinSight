@@ -36,32 +36,22 @@ async function requireSignedInUser() {
   return user.id;
 }
 
+// Minimal sign-up: create auth user → create profile + main account → stay signed in.
+// No email confirmation required (disable it in Supabase → Auth → Providers → Email).
 export async function signUpWithPassword(input: { fullName: string; email: string; phone: string; password: string }) {
   const db = client();
-  const metadata = { full_name: input.fullName, phone_number: input.phone };
-  let user = await currentUser();
-
-  // Convert the old anonymous workspace into a permanent account when possible,
-  // preserving that user's existing finance rows and their RLS ownership.
-  if (user?.is_anonymous) {
-    const { data, error } = await db.auth.updateUser({ email: input.email, password: input.password, data: metadata });
-    raise(error);
-    user = data.user;
-  } else {
-    const { data, error } = await db.auth.signUp({
-      email: input.email,
-      password: input.password,
-      options: { data: metadata }
-    });
-    raise(error);
-    user = data.user;
-    if (!data.session) return { needsEmailConfirmation: true };
-  }
-
+  const { data, error } = await db.auth.signUp({
+    email: input.email,
+    password: input.password,
+    options: { data: { full_name: input.fullName, phone_number: input.phone } },
+  });
+  raise(error);
+  const user = data.user;
   if (!user) throw new Error("Supabase did not return the new account.");
+  if (!data.session) throw new Error("Please confirm your email first, or disable email confirmation in Supabase Auth settings.");
+
   await saveProfile({ fullName: input.fullName, email: input.email, phone: input.phone });
   await ensureMainAccount(user.id);
-  await db.auth.signOut();
   return { needsEmailConfirmation: false };
 }
 
@@ -87,12 +77,6 @@ async function saveProfile(profile: { fullName: string; email: string; phone: st
     onboarding_completed: true
   });
   raise(error);
-}
-
-export async function completeUserProfile(profile: { fullName: string; email: string; phone: string }) {
-  const userId = await requireSignedInUser();
-  await saveProfile(profile);
-  await ensureMainAccount(userId);
 }
 
 async function ensureMainAccount(userId: string) {

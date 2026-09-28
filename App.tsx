@@ -76,7 +76,7 @@ export default function App() {
     );
   }
 
-  const onAuthFlow = !E.profile || ["welcome", "login", "signup", "reset", "complete", "onboarding"].includes(E.authMode);
+  const onAuthFlow = !E.profile || ["welcome", "login", "signup", "reset"].includes(E.authMode);
   if (onAuthFlow) {
     return (
       <SafeAreaProvider><SafeAreaView style={ctx.s.safe} edges={["top", "left", "right", "bottom"]}>

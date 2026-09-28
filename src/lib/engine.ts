@@ -97,7 +97,7 @@ export function useAppEngine() {
   const cloud = isSupabaseConfigured;
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoaded, setProfileLoaded] = useState(false);
-  const [authMode, setAuthMode] = useState<"welcome" | "login" | "signup" | "reset" | "complete" | "onboarding">("welcome");
+  const [authMode, setAuthMode] = useState<"welcome" | "login" | "signup" | "reset">("welcome");
   const [authBusy, setAuthBusy] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
   const [tab, setTab] = useState<Tab>("Spend");
@@ -176,8 +176,7 @@ export function useAppEngine() {
         if (user && !user.is_anonymous) {
           const w = await api.loadWorkspace();
           if (!active) return;
-          if (!w.profile) { setAuthMode("complete"); setAuthEmail(user.email || ""); }
-          else hydrate(w);
+          hydrate(w); // loadWorkspace auto-creates the profile row from auth metadata — no extra screens
         }
       } catch (e: any) {
         if (active) Alert.alert("Could not load your account", e?.message || "Please sign in again.");
@@ -210,13 +209,14 @@ export function useAppEngine() {
     try { await fn(); if (!cloud) bump(); } catch (e: any) { Alert.alert("Something went wrong", e?.message || "Please try again."); }
   };
 
-  // ---------- auth ----------
+  // ---------- auth (minimal: sign up → straight to dashboard) ----------
   const signUp = (value: UserProfile, password: string) => guard(async () => {
     if (!cloud) { Alert.alert("Demo mode", "Supabase keys are not configured, so this build runs fully offline with local data. Add EXPO_PUBLIC_SUPABASE_URL and ANON key to .env.local for real accounts."); return; }
     setAuthBusy(true);
-    const r = await api.signUpWithPassword({ ...value, password });
-    setAuthEmail(value.email); setAuthMode("login");
-    notify("Account created", r.needsEmailConfirmation ? "Confirm your email, then sign in." : "Your account is ready. Sign in to continue.");
+    await api.signUpWithPassword({ ...value, password });   // creates profile + main account, stays signed in
+    const w = await api.loadWorkspace();                    // load their fresh workspace…
+    hydrate(w);                                             // …and go directly to the dashboard
+    notify("Account created", `Welcome, ${value.fullName.split(" ")[0]}! Tap ＋ to add your first transaction.`);
     setAuthBusy(false);
   });
 
@@ -225,7 +225,7 @@ export function useAppEngine() {
     setAuthBusy(true);
     await api.signInWithPassword(email, password);
     const w = await api.loadWorkspace();
-    if (!w.profile) { setAuthMode("complete"); setAuthEmail(email); } else hydrate(w);
+    hydrate(w);
     setAuthBusy(false);
   });
 
@@ -235,26 +235,6 @@ export function useAppEngine() {
     if (error) throw error;
     notify("Reset link sent", "Check your inbox for a password reset link.");
     setAuthMode("login");
-  });
-
-  const completeProfile = (value: UserProfile) => guard(async () => {
-    if (cloud) { await api.completeUserProfile(value); const w = await api.loadWorkspace(); hydrate(w); }
-    else { demoRef.current.profile = value; setProfile(value); bump(); }
-    setAuthMode("welcome");
-  });
-
-  const finishOnboarding = (input: { currency: string; accountName: string; accountType: string; openingBalance: number; monthlyIncome: number }) => guard(async () => {
-    setCurrency(input.currency);
-    if (cloud) {
-      await api.setProfileCurrency(input.currency);
-      await api.setProfileMonthlyIncome(input.monthlyIncome);
-      if (input.accountName) await api.createAccount({ name: input.accountName, type: input.accountType, balance: input.openingBalance });
-      await refreshCloud();
-    } else {
-      if (input.accountName) setAccounts((a) => [...a, { id: String(Date.now()), name: input.accountName, type: input.accountType, balance: input.openingBalance }]);
-      setMonthlyIncome(input.monthlyIncome);
-    }
-    notify("You're all set", "Your workspace is ready. Use Quick Add to record anything.");
   });
 
   const logout = async () => {
@@ -421,7 +401,7 @@ export function useAppEngine() {
     tab, setTab, subpage, setSubpage, selected, setSelected, quickOpen, setQuickOpen, moreOpen, setMoreOpen, toast, setToast, notifications, setNotifications,
     currency, themeName, accounts, tx, dues, duePayments, assets, invTx, goals, bills, billPayments, categories, monthlyIncome,
     balance, spent, income, catTotals, owe, owed, investedTotal, portfolioValue, monthlyBills, availableSavings, dueThisWeek, overdueBills,
-    signUp, signIn, resetPassword, completeProfile, finishOnboarding, logout,
+    signUp, signIn, resetPassword, logout,
     quickAdd, deleteTx, editTx, addAccount, payDue, deleteDue, updateAsset, deleteAsset, logInvestmentTx,
     contributeGoal, cyclePriority, setPriority, deleteGoal, markBillPaid, editBill, deleteBill,
     toggleTheme, changeCurrency, exportData, resetDemo, notify,
