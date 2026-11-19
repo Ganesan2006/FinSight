@@ -1,0 +1,19 @@
+{
+  "name": "finsight",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "app": "npm --prefix app start",
+    "app:start": "npm --prefix app start",
+    "app:android": "npm --prefix app run android",
+    "app:ios": "npm --prefix app run ios",
+    "app:web": "npm --prefix app run web",
+    "backend": "npm --prefix backend run dev",
+    "backend:dev": "npm --prefix backend run dev",
+    "backend:start": "npm --prefix backend start",
+    "install:app": "npm --prefix app install",
+    "install:backend": "npm --prefix backend install",
+    "install:sms": "cd microservices/sms-service && pip install -r requirements.txt",
+    "install:all": "npm --prefix app install && npm --prefix backend install"
+  }
+}

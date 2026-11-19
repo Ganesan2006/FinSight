@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "finsight-backend",
+    "slug": "finsight-backend",
+    "version": "1.0.0",
+    "description": "Finance Copilot REST API — Express + Supabase Postgres",
+    "sdkVersion": "51.0.0",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+# JavaScript dependencies and logs
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Python environments, bytecode, and tool caches
+**/.venv/
+**/venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local secrets and environment files; keep checked-in templates
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!.env.*.example
+!**/.env.example
+!**/.env.*.example
+
+# Expo and generated build output
+.expo/
+**/.expo/
+web-build/
+**/dist/
+**/build/
+coverage/
+
+# Local-only data and credentials
+backend/db/localdb.json
+*.keystore
+*.jks
+
+# Editor and operating system files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
